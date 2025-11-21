@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui';
 
 import 'package:flame/collisions.dart';
 import 'package:flame/components.dart';
@@ -19,12 +18,14 @@ class GameApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Asteroids Prototype',
+      title: 'Asteroids Game',
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         backgroundColor: Colors.black,
         body: GameWidget(
           game: AsteroidsGame(),
+          focusNode: FocusNode(), // helps ensure keyboard input works
+          autofocus: true,
         ),
       ),
     );
@@ -39,46 +40,45 @@ class AsteroidsGame extends FlameGame
   bool isGameOver = false;
   int level = 1;
   int asteroidCount = 0;
+  int lives = 3;
+
+  bool get isPlaying => !isGameOver;
 
   @override
   Color backgroundColor() => Colors.black;
 
   @override
   Future<void> onLoad() async {
-    await super.onLoad();
+    super.onLoad();
 
-    // Starfield background
     add(Starfield());
+    add(LivesDock());
 
-    // Ship
     ship = Spaceship();
     add(ship!);
 
-    // Start level 1 (1 big asteroid)
+    // Auto-start the game immediately
     startLevel();
   }
 
   @override
-  void onGameResize(Vector2 canvasSize) {
-    super.onGameResize(canvasSize);
-
-    // Center the ship if it's already in the game
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
     if (ship != null && ship!.parent != null) {
-      ship!.position = canvasSize / 2;
+      ship!.position = size / 2;
     }
   }
 
   void spawnBullet(Vector2 position, double angle) {
-    if (isGameOver) return;
+    if (!isPlaying) return;
 
     final bullet = Bullet(angle: angle)
       ..position = position
       ..anchor = Anchor.center;
+
     add(bullet);
   }
 
-  /// Spawn an asteroid of a given size level.
-  /// sizeLevel: 2 = large, 1 = medium, 0 = small
   void spawnAsteroid({
     required int sizeLevel,
     Vector2? position,
@@ -86,8 +86,8 @@ class AsteroidsGame extends FlameGame
   }) {
     final vel = velocity ??
         Vector2(
-          (_rand.nextDouble() - 0.5) * 120, // random X speed
-          (_rand.nextDouble() - 0.5) * 120, // random Y speed
+          (_rand.nextDouble() - 0.5) * 120,
+          (_rand.nextDouble() - 0.5) * 120,
         );
 
     final asteroid = Asteroid(
@@ -105,13 +105,12 @@ class AsteroidsGame extends FlameGame
     add(asteroid);
   }
 
-  /// Create smaller asteroids when a bigger one is destroyed.
   void splitAsteroid(Asteroid parent) {
     final newLevel = parent.sizeLevel - 1;
     if (newLevel < 0) return;
 
     for (var i = 0; i < 2; i++) {
-      final angle = _rand.nextDouble() * 2 * math.pi;
+      final angle = _rand.nextDouble() * math.pi * 2;
       final speed = 80 + _rand.nextDouble() * 60;
       final vel = Vector2(math.cos(angle), math.sin(angle)) * speed;
 
@@ -123,39 +122,34 @@ class AsteroidsGame extends FlameGame
     }
   }
 
-  /// Called whenever an asteroid is removed from the game (destroyed).
   void onAsteroidDestroyed() {
-    if (isGameOver) return;
+    if (!isPlaying) return;
 
     asteroidCount--;
+
     if (asteroidCount <= 0) {
       nextLevel();
     }
   }
 
-  /// Start the current level by spawning [level] big asteroids.
   void startLevel() {
     final center = size / 2;
-    final double ringRadius = (math.min(size.x, size.y) * 0.35)
-        .clamp(80.0, 400.0)
-        .toDouble(); // ensure double
+    final double ringRadius =
+        (math.min(size.x, size.y) * 0.35).clamp(80.0, 400.0).toDouble();
 
     for (var i = 0; i < level; i++) {
       final angle = (2 * math.pi * i) / level;
-      final dir = Vector2(math.cos(angle), math.sin(angle));
 
+      final dir = Vector2(math.cos(angle), math.sin(angle));
       final pos = center + dir * ringRadius;
 
-      // Give them velocities roughly tangent to the circle
       final tangentAngle = angle + math.pi / 2;
       final speed = 60 + _rand.nextDouble() * 80;
-      final vel = Vector2(
-        math.cos(tangentAngle),
-        math.sin(tangentAngle),
-      ) * speed;
+      final vel =
+          Vector2(math.cos(tangentAngle), math.sin(tangentAngle)) * speed;
 
       spawnAsteroid(
-        sizeLevel: 2, // always large at wave start
+        sizeLevel: 2,
         position: pos,
         velocity: vel,
       );
@@ -163,9 +157,8 @@ class AsteroidsGame extends FlameGame
   }
 
   void nextLevel() {
-    level++;
+    level++; // B: keep incrementing levels
 
-    // Reset ship a bit for the new level (only if still alive)
     if (ship != null && ship!.parent != null) {
       ship!
         ..position = size / 2
@@ -173,27 +166,59 @@ class AsteroidsGame extends FlameGame
         ..angle = 0;
     }
 
-    // Spawn level big asteroids in a ring
     startLevel();
   }
 
-  void gameOver() {
-    if (isGameOver) return;
-    isGameOver = true;
+  // Called when a ship collides with an asteroid
+  void onShipHit(Spaceship hitShip) {
+    if (!isPlaying) return;
+    if (hitShip.isInvincible) return;
 
-    // Show GAME OVER text
+    hitShip.removeFromParent();
+    lives--;
+
+    if (lives <= 0) {
+      _triggerGameOver();
+    } else {
+      _respawnShip();
+    }
+  }
+
+  void _respawnShip() {
+    add(
+      TimerComponent(
+        period: 1.0,
+        repeat: false,
+        onTick: () {
+          final newShip = Spaceship()
+            ..position = size / 2
+            ..invincibleTime = 2.0; // 2 seconds invincibility
+          ship = newShip;
+          add(newShip);
+        },
+      ),
+    );
+  }
+
+  void _triggerGameOver() {
+    isGameOver = true;
     add(GameOverText());
   }
 }
 
-/// Simple starfield background
-class Starfield extends Component with HasGameRef<AsteroidsGame> {
-  final List<_Star> _stars = [];
+//────────────────────────────────────────
+// STARFIELD BACKGROUND
+//────────────────────────────────────────
+
+class Starfield extends Component with HasGameReference<AsteroidsGame> {
   final int starCount;
   final math.Random _rand = math.Random();
 
+  final List<Offset> _positions = [];
+  final List<double> _radii = [];
+  final List<Paint> _paints = [];
+
   Starfield({this.starCount = 200}) {
-    // Draw behind everything else
     priority = -10;
   }
 
@@ -201,25 +226,21 @@ class Starfield extends Component with HasGameRef<AsteroidsGame> {
   Future<void> onLoad() async {
     super.onLoad();
 
-    final size = gameRef.size;
+    final s = game.size;
 
     for (var i = 0; i < starCount; i++) {
-      final x = _rand.nextDouble() * size.x;
-      final y = _rand.nextDouble() * size.y;
+      final x = _rand.nextDouble() * s.x;
+      final y = _rand.nextDouble() * s.y;
 
-      final radius = 0.5 + _rand.nextDouble() * 2.0; // 0.5 to 2.5
-      final brightness = 0.3 + _rand.nextDouble() * 0.7; // 0.3 to 1.0
+      final radius = 0.5 + _rand.nextDouble() * 2.0;
+      final brightness = 0.3 + _rand.nextDouble() * 0.7;
 
-      final paint = Paint()
-        ..color = Colors.white.withOpacity(brightness)
-        ..style = PaintingStyle.fill;
-
-      _stars.add(
-        _Star(
-          position: Offset(x, y),
-          radius: radius,
-          paint: paint,
-        ),
+      _positions.add(Offset(x, y));
+      _radii.add(radius);
+      _paints.add(
+        Paint()
+          ..color = Colors.white.withValues(alpha: brightness)
+          ..style = PaintingStyle.fill,
       );
     }
   }
@@ -227,35 +248,64 @@ class Starfield extends Component with HasGameRef<AsteroidsGame> {
   @override
   void render(Canvas canvas) {
     super.render(canvas);
-
-    for (final star in _stars) {
-      canvas.drawCircle(star.position, star.radius, star.paint);
+    for (var i = 0; i < _positions.length; i++) {
+      canvas.drawCircle(_positions[i], _radii[i], _paints[i]);
     }
   }
 }
 
-class _Star {
-  final Offset position;
-  final double radius;
-  final Paint paint;
+//────────────────────────────────────────
+// LIVES DOCK (3 ships upper-left)
+//────────────────────────────────────────
 
-  _Star({
-    required this.position,
-    required this.radius,
-    required this.paint,
-  });
+class LivesDock extends PositionComponent with HasGameReference<AsteroidsGame> {
+  LivesDock() : super(position: Vector2(10, 10), size: Vector2(200, 24));
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+
+    final lives = game.lives;
+
+    const double w = 16;
+    const double h = 16;
+    const double spacing = 6;
+
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+
+    for (int i = 0; i < lives; i++) {
+      final dx = i * (w + spacing);
+
+      final path = Path();
+      path.moveTo(dx + w / 2, 0);
+      path.lineTo(dx + w, h);
+      path.lineTo(dx, h);
+      path.close();
+
+      canvas.drawPath(path, paint);
+    }
+  }
 }
 
+//────────────────────────────────────────
+// SPACESHIP (vector outline)
+//────────────────────────────────────────
+
 class Spaceship extends PositionComponent
-    with KeyboardHandler, HasGameRef<AsteroidsGame>, CollisionCallbacks {
-  final double rotationSpeed = 3.0; // radians per second
-  final double thrust = 200.0; // pixels per second^2
+    with KeyboardHandler, HasGameReference<AsteroidsGame>, CollisionCallbacks {
+  final double rotationSpeed = 3.0;
+  final double thrust = 200.0;
 
   Vector2 velocity = Vector2.zero();
-
   bool turningLeft = false;
   bool turningRight = false;
   bool accelerating = false;
+
+  double invincibleTime = 0;
+  bool get isInvincible => invincibleTime > 0;
 
   Spaceship() : super(size: Vector2(40, 40), anchor: Anchor.center);
 
@@ -263,31 +313,36 @@ class Spaceship extends PositionComponent
   Future<void> onLoad() async {
     super.onLoad();
 
-    position = gameRef.size / 2;
+    position = game.size / 2;
 
-    // Draw a simple triangle ship
-    final shipShape = PolygonComponent.relative(
-      [
-        Vector2(0.0, -1.0), // nose
-        Vector2(0.7, 1.0),  // right rear
-        Vector2(-0.7, 1.0), // left rear
-      ],
+    final List<Vector2> shipPoints = [
+      Vector2(0.0, -1.0),
+      Vector2(0.25, -0.3),
+      Vector2(0.6, 0.4),
+      Vector2(0.3, 0.9),
+      Vector2(0.15, 1.0),
+      Vector2(-0.15, 1.0),
+      Vector2(-0.3, 0.9),
+      Vector2(-0.6, 0.4),
+      Vector2(-0.25, -0.3),
+    ];
+
+    final hull = PolygonComponent.relative(
+      shipPoints,
       parentSize: size,
-      paint: Paint()..color = Colors.white,
+      paint: Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
     )
       ..anchor = Anchor.center
       ..position = size / 2;
 
-    add(shipShape);
+    add(hull);
 
-    // Hitbox for collisions
     add(
       PolygonHitbox.relative(
-        [
-          Vector2(0.0, -1.0),
-          Vector2(0.7, 1.0),
-          Vector2(-0.7, 1.0),
-        ],
+        shipPoints,
         parentSize: size,
       ),
     );
@@ -297,71 +352,70 @@ class Spaceship extends PositionComponent
   void update(double dt) {
     super.update(dt);
 
-    if (gameRef.isGameOver) {
-      // Freeze ship when game is over
-      return;
+    if (!game.isPlaying) return;
+
+    if (invincibleTime > 0) {
+      invincibleTime -= dt;
+      if (invincibleTime < 0) invincibleTime = 0;
     }
 
-    // Rotate
-    if (turningLeft) {
-      angle -= rotationSpeed * dt;
-    }
-    if (turningRight) {
-      angle += rotationSpeed * dt;
-    }
+    if (turningLeft) angle -= rotationSpeed * dt;
+    if (turningRight) angle += rotationSpeed * dt;
 
-    // Thrust in the facing direction
     if (accelerating) {
       final direction = Vector2(0, -1)..rotate(angle);
       velocity += direction * thrust * dt;
     }
 
-    // Move
     position += velocity * dt;
 
-    // Smooth friction when not accelerating
     if (!accelerating) {
-      velocity *= 0.95; // tweak for more/less glide
-
-      // Avoid jitter when almost stopped
-      if (velocity.length < 1) {
-        velocity = Vector2.zero();
-      }
+      velocity *= 0.95;
+      if (velocity.length < 1) velocity = Vector2.zero();
     }
 
-    // Screen wrap-around
-    final screen = gameRef.size;
-    if (position.x < 0) position.x += screen.x;
-    if (position.x > screen.x) position.x -= screen.x;
-    if (position.y < 0) position.y += screen.y;
-    if (position.y > screen.y) position.y -= screen.y;
+    final s = game.size;
+
+    if (position.x < 0) position.x += s.x;
+    if (position.x > s.x) position.x -= s.x;
+    if (position.y < 0) position.y += s.y;
+    if (position.y > s.y) position.y -= s.y;
+  }
+
+  @override
+  void render(Canvas canvas) {
+    // Blink when invincible
+    if (invincibleTime > 0) {
+      final t = (invincibleTime * 10).floor();
+      if (t.isEven) return;
+    }
+    super.render(canvas);
   }
 
   @override
   bool onKeyEvent(KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
-    if (gameRef.isGameOver) {
-      // Ignore controls when game is over
-      return false;
-    }
+    if (!game.isPlaying) return false;
 
     turningLeft = keysPressed.contains(LogicalKeyboardKey.arrowLeft);
     turningRight = keysPressed.contains(LogicalKeyboardKey.arrowRight);
     accelerating = keysPressed.contains(LogicalKeyboardKey.arrowUp);
 
-    // Shoot on space bar down
     if (event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.space) {
-      final direction = Vector2(0, -1)..rotate(angle);
-      final spawnPosition = position + direction * (size.y / 2);
-      gameRef.spawnBullet(spawnPosition, angle);
+      final dir = Vector2(0, -1)..rotate(angle);
+      final bulletPos = position + dir * (size.y / 2);
+      game.spawnBullet(bulletPos, angle);
     }
-
     return true;
   }
 }
 
+//────────────────────────────────────────
+// BULLETS
+//────────────────────────────────────────
+
 class Bullet extends CircleComponent
-    with CollisionCallbacks, HasGameRef<AsteroidsGame> {
+    with CollisionCallbacks, HasGameReference<AsteroidsGame> {
   final double speed = 400.0;
   late final Vector2 velocity;
 
@@ -370,8 +424,7 @@ class Bullet extends CircleComponent
           radius: 3,
           paint: Paint()..color = Colors.yellow,
         ) {
-    final dir = Vector2(0, -1)..rotate(angle);
-    velocity = dir * speed;
+    velocity = (Vector2(0, -1)..rotate(angle)) * speed;
   }
 
   @override
@@ -384,45 +437,44 @@ class Bullet extends CircleComponent
   void update(double dt) {
     super.update(dt);
 
-    if (gameRef.isGameOver) {
-      // Freeze bullets on game over
-      return;
-    }
+    if (!game.isPlaying) return;
 
     position += velocity * dt;
 
-    // Remove bullet when it leaves the screen
-    final screen = gameRef.size;
+    final s = game.size;
     if (position.x < 0 ||
-        position.x > screen.x ||
+        position.x > s.x ||
         position.y < 0 ||
-        position.y > screen.y) {
+        position.y > s.y) {
       removeFromParent();
     }
   }
 }
 
+//────────────────────────────────────────
+// ASTEROIDS
+//────────────────────────────────────────
+
 class Asteroid extends PositionComponent
-    with CollisionCallbacks, HasGameRef<AsteroidsGame> {
-  /// 2 = large, 1 = medium, 0 = small
+    with CollisionCallbacks, HasGameReference<AsteroidsGame> {
   final int sizeLevel;
   Vector2 velocity;
   final math.Random _rand = math.Random();
-  late final List<Vector2> _shapePoints;
+  late final List<Vector2> shape;
 
   Asteroid({
     required this.sizeLevel,
     required this.velocity,
   }) : super(anchor: Anchor.center);
 
-  static double _sizeForLevel(int level) {
+  static double sizeForLevel(int level) {
     switch (level) {
       case 2:
-        return 60; // large
+        return 60;
       case 1:
-        return 40; // medium
+        return 40;
       default:
-        return 24; // small
+        return 24;
     }
   }
 
@@ -430,14 +482,12 @@ class Asteroid extends PositionComponent
   Future<void> onLoad() async {
     super.onLoad();
 
-    final s = _sizeForLevel(sizeLevel);
-    size = Vector2(s, s);
+    size = Vector2.all(sizeForLevel(sizeLevel));
 
-    _generateJaggedShape();
+    shape = _generateJaggedShape();
 
-    // Visual polygon
     final poly = PolygonComponent.relative(
-      _shapePoints,
+      shape,
       parentSize: size,
       paint: Paint()..color = Colors.grey,
     )
@@ -446,73 +496,57 @@ class Asteroid extends PositionComponent
 
     add(poly);
 
-    // Collision hitbox
     add(
       PolygonHitbox.relative(
-        _shapePoints,
+        shape,
         parentSize: size,
       ),
     );
   }
 
-  void _generateJaggedShape() {
-    // Create a rough, jagged polygon by randomly varying radius at each angle
-    final int vertexCount = 10 + _rand.nextInt(5); // 10–14 points
-    _shapePoints = [];
+  List<Vector2> _generateJaggedShape() {
+    final int n = 10 + _rand.nextInt(5);
+    final List<Vector2> pts = [];
 
-    for (var i = 0; i < vertexCount; i++) {
-      final angle = (2 * math.pi * i) / vertexCount;
-      final radiusFactor = 0.7 + _rand.nextDouble() * 0.3; // between 0.7 and 1.0
+    for (int i = 0; i < n; i++) {
+      final angle = (2 * math.pi * i) / n;
+      final r = 0.7 + _rand.nextDouble() * 0.3;
 
-      final x = math.cos(angle) * radiusFactor;
-      final y = math.sin(angle) * radiusFactor;
-
-      _shapePoints.add(Vector2(x, y));
+      pts.add(Vector2(math.cos(angle) * r, math.sin(angle) * r));
     }
+
+    return pts;
   }
 
   @override
   void update(double dt) {
     super.update(dt);
 
-    if (gameRef.isGameOver) {
-      // Freeze asteroids on game over
-      return;
-    }
+    if (!game.isPlaying) return;
 
-    // Move asteroid
     position += velocity * dt;
 
-    // Screen wrap-around
-    final screen = gameRef.size;
-    if (position.x < 0) position.x += screen.x;
-    if (position.x > screen.x) position.x -= screen.x;
-    if (position.y < 0) position.y += screen.y;
-    if (position.y > screen.y) position.y -= screen.y;
+    final s = game.size;
+    if (position.x < 0) position.x += s.x;
+    if (position.x > s.x) position.x -= s.x;
+    if (position.y < 0) position.y += s.y;
+    if (position.y > s.y) position.y -= s.y;
   }
 
   @override
-  void onCollision(
-    Set<Vector2> intersectionPoints,
-    PositionComponent other,
-  ) {
-    // Bullet hits asteroid -> split or destroy
+  void onCollision(Set<Vector2> intersectionPoints, PositionComponent other) {
     if (other is Bullet) {
       other.removeFromParent();
 
       if (sizeLevel > 0) {
-        // Split into two smaller asteroids
-        gameRef.splitAsteroid(this);
+        game.splitAsteroid(this);
       }
 
-      // Remove the original asteroid
       removeFromParent();
     }
 
-    // Asteroid hits spaceship -> game over
     if (other is Spaceship) {
-      gameRef.gameOver();
-      other.removeFromParent();
+      game.onShipHit(other);
     }
 
     super.onCollision(intersectionPoints, other);
@@ -520,30 +554,32 @@ class Asteroid extends PositionComponent
 
   @override
   void onRemove() {
-    // Count this asteroid as destroyed (only if not game over)
-    gameRef.onAsteroidDestroyed();
+    game.onAsteroidDestroyed();
     super.onRemove();
   }
 }
 
-class GameOverText extends TextComponent with HasGameRef<AsteroidsGame> {
+//────────────────────────────────────────
+// GAME OVER TEXT
+//────────────────────────────────────────
+
+class GameOverText extends TextComponent with HasGameReference<AsteroidsGame> {
   GameOverText()
       : super(
-          text: 'GAME OVER',
+          text: "GAME OVER",
           textRenderer: TextPaint(
             style: const TextStyle(
-              color: Colors.white,
-              fontSize: 40,
+              fontSize: 32,
               fontWeight: FontWeight.bold,
+              color: Colors.white,
             ),
           ),
+          anchor: Anchor.center,
         );
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    anchor = Anchor.center;
-    position = gameRef.size / 2;
+    position = game.size / 2;
   }
 }
-
