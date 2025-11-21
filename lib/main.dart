@@ -5,6 +5,7 @@ import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:flame/input.dart';
 import 'package:flame/text.dart';
+import 'package:flame_audio/flame_audio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -32,6 +33,34 @@ class GameApp extends StatelessWidget {
   }
 }
 
+/// Simple sound manager for SFX.
+///
+/// Make sure you have these files (or change names to match your files):
+///   assets/audio/laser.wav
+///   assets/audio/asteroid_hit.wav
+///   assets/audio/ship_explosion.wav
+class Sfx {
+  static Future<void> init() async {
+    await FlameAudio.audioCache.loadAll([
+      'laser.wav',
+      'asteroid_hit.wav',
+      'ship_explosion.wav',
+    ]);
+  }
+
+  static void fire() {
+    FlameAudio.play('laser.wav');
+  }
+
+  static void asteroidHit() {
+    FlameAudio.play('asteroid_hit.wav');
+  }
+
+  static void shipExplosion() {
+    FlameAudio.play('ship_explosion.wav');
+  }
+}
+
 class AsteroidsGame extends FlameGame
     with HasKeyboardHandlerComponents, HasCollisionDetection {
   Spaceship? ship;
@@ -40,7 +69,12 @@ class AsteroidsGame extends FlameGame
   bool isGameOver = false;
   int level = 1;
   int asteroidCount = 0;
-  int lives = 3;
+
+  // 3 extra ships in the dock; plus the current one = 4 total lives.
+  int extraLives = 3;
+
+  // Used to freeze asteroid/ship/bullet movement during explosions.
+  bool freezeForExplosion = false;
 
   bool get isPlaying => !isGameOver;
 
@@ -50,6 +84,9 @@ class AsteroidsGame extends FlameGame
   @override
   Future<void> onLoad() async {
     super.onLoad();
+
+    // Load sounds
+    await Sfx.init();
 
     add(Starfield());
     add(LivesDock());
@@ -70,13 +107,16 @@ class AsteroidsGame extends FlameGame
   }
 
   void spawnBullet(Vector2 position, double angle) {
-    if (!isPlaying) return;
+    if (!isPlaying || freezeForExplosion) return;
 
     final bullet = Bullet(angle: angle)
       ..position = position
       ..anchor = Anchor.center;
 
     add(bullet);
+
+    // Play firing sound
+    Sfx.fire();
   }
 
   void spawnAsteroid({
@@ -157,7 +197,7 @@ class AsteroidsGame extends FlameGame
   }
 
   void nextLevel() {
-    level++; // B: keep incrementing levels
+    level++; // keep incrementing levels
 
     if (ship != null && ship!.parent != null) {
       ship!
@@ -169,25 +209,66 @@ class AsteroidsGame extends FlameGame
     startLevel();
   }
 
-  // Called when a ship collides with an asteroid
-  void onShipHit(Spaceship hitShip) {
+  // Handles collision between an asteroid and the ship, with explosions and sound.
+  void onShipAsteroidCollision(Asteroid asteroid, Spaceship hitShip) {
     if (!isPlaying) return;
     if (hitShip.isInvincible) return;
 
-    hitShip.removeFromParent();
-    lives--;
+    // Play explosion sound
+    Sfx.shipExplosion();
 
-    if (lives <= 0) {
-      _triggerGameOver();
-    } else {
-      _respawnShip();
+    // Freeze game movement while explosion is playing.
+    freezeForExplosion = true;
+
+    // Spawn explosion effects for ship and asteroid.
+    add(
+      Explosion(
+        center: hitShip.position.clone(),
+        color: Colors.white,
+        pieceCount: 24,
+        duration: 1.0,
+      ),
+    );
+    add(
+      Explosion(
+        center: asteroid.position.clone(),
+        color: Colors.grey,
+        pieceCount: 20,
+        duration: 1.0,
+      ),
+    );
+
+    // Remove the actual ship and asteroid from the game.
+    asteroid.removeFromParent();
+    hitShip.removeFromParent();
+
+    // Determine if we will respawn or end the game after the explosion.
+    final bool willRespawn = extraLives > 0;
+    if (willRespawn) {
+      extraLives--;
     }
+
+    // After the explosion finishes, unfreeze and either respawn or game over.
+    add(
+      TimerComponent(
+        period: 1.0, // match Explosion duration
+        repeat: false,
+        onTick: () {
+          freezeForExplosion = false;
+          if (willRespawn) {
+            _respawnShip();
+          } else {
+            _triggerGameOver();
+          }
+        },
+      ),
+    );
   }
 
   void _respawnShip() {
     add(
       TimerComponent(
-        period: 1.0,
+        period: 0.1, // very short delay, explosion already finished
         repeat: false,
         onTick: () {
           final newShip = Spaceship()
@@ -239,7 +320,7 @@ class Starfield extends Component with HasGameReference<AsteroidsGame> {
       _radii.add(radius);
       _paints.add(
         Paint()
-          ..color = Colors.white.withValues(alpha: brightness)
+          ..color = Colors.white.withOpacity(brightness)
           ..style = PaintingStyle.fill,
       );
     }
@@ -265,7 +346,8 @@ class LivesDock extends PositionComponent with HasGameReference<AsteroidsGame> {
   void render(Canvas canvas) {
     super.render(canvas);
 
-    final lives = game.lives;
+    // Draw the number of EXTRA lives (ships in the dock).
+    final lives = game.extraLives;
 
     const double w = 16;
     const double h = 16;
@@ -352,7 +434,7 @@ class Spaceship extends PositionComponent
   void update(double dt) {
     super.update(dt);
 
-    if (!game.isPlaying) return;
+    if (!game.isPlaying || game.freezeForExplosion) return;
 
     if (invincibleTime > 0) {
       invincibleTime -= dt;
@@ -394,7 +476,7 @@ class Spaceship extends PositionComponent
 
   @override
   bool onKeyEvent(KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
-    if (!game.isPlaying) return false;
+    if (!game.isPlaying || game.freezeForExplosion) return false;
 
     turningLeft = keysPressed.contains(LogicalKeyboardKey.arrowLeft);
     turningRight = keysPressed.contains(LogicalKeyboardKey.arrowRight);
@@ -437,7 +519,7 @@ class Bullet extends CircleComponent
   void update(double dt) {
     super.update(dt);
 
-    if (!game.isPlaying) return;
+    if (!game.isPlaying || game.freezeForExplosion) return;
 
     position += velocity * dt;
 
@@ -522,7 +604,7 @@ class Asteroid extends PositionComponent
   void update(double dt) {
     super.update(dt);
 
-    if (!game.isPlaying) return;
+    if (!game.isPlaying || game.freezeForExplosion) return;
 
     position += velocity * dt;
 
@@ -530,6 +612,7 @@ class Asteroid extends PositionComponent
     if (position.x < 0) position.x += s.x;
     if (position.x > s.x) position.x -= s.x;
     if (position.y < 0) position.y += s.y;
+    if (position.y > s.y) position -= Vector2(0, s.y);
     if (position.y > s.y) position.y -= s.y;
   }
 
@@ -537,6 +620,9 @@ class Asteroid extends PositionComponent
   void onCollision(Set<Vector2> intersectionPoints, PositionComponent other) {
     if (other is Bullet) {
       other.removeFromParent();
+
+      // Play asteroid hit sound
+      Sfx.asteroidHit();
 
       if (sizeLevel > 0) {
         game.splitAsteroid(this);
@@ -546,7 +632,7 @@ class Asteroid extends PositionComponent
     }
 
     if (other is Spaceship) {
-      game.onShipHit(other);
+      game.onShipAsteroidCollision(this, other);
     }
 
     super.onCollision(intersectionPoints, other);
@@ -557,6 +643,97 @@ class Asteroid extends PositionComponent
     game.onAsteroidDestroyed();
     super.onRemove();
   }
+}
+
+//────────────────────────────────────────
+// EXPLOSION (debris pieces that fade out)
+//────────────────────────────────────────
+
+class Explosion extends PositionComponent {
+  final int pieceCount;
+  final double duration;
+  final Color color;
+  final math.Random _rand = math.Random();
+
+  final List<_ExplosionPiece> _pieces = [];
+  double _time = 0;
+
+  Explosion({
+    required Vector2 center,
+    this.pieceCount = 20,
+    this.duration = 0.8,
+    this.color = Colors.white,
+  }) : super(position: center, anchor: Anchor.center);
+
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+
+    for (int i = 0; i < pieceCount; i++) {
+      final angle = _rand.nextDouble() * 2 * math.pi;
+      final speed = 60 + _rand.nextDouble() * 140;
+      final vx = math.cos(angle) * speed;
+      final vy = math.sin(angle) * speed;
+      final size = 2.0 + _rand.nextDouble() * 4.0;
+
+      _pieces.add(
+        _ExplosionPiece(
+          offset: Vector2.zero(),
+          velocity: Vector2(vx, vy),
+          size: size,
+        ),
+      );
+    }
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+
+    _time += dt;
+    for (final p in _pieces) {
+      p.offset += p.velocity * dt;
+      // Slight slow-down over time
+      p.velocity *= 0.9;
+    }
+
+    if (_time >= duration) {
+      removeFromParent();
+    }
+  }
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+
+    final progress = (_time / duration).clamp(0.0, 1.0);
+    final alpha = (255 * (1.0 - progress)).toInt();
+
+    final paint = Paint()
+      ..color = color.withAlpha(alpha)
+      ..style = PaintingStyle.fill;
+
+    for (final p in _pieces) {
+      final rect = Rect.fromCenter(
+        center: Offset(p.offset.x, p.offset.y),
+        width: p.size,
+        height: p.size,
+      );
+      canvas.drawRect(rect, paint);
+    }
+  }
+}
+
+class _ExplosionPiece {
+  Vector2 offset;
+  Vector2 velocity;
+  double size;
+
+  _ExplosionPiece({
+    required this.offset,
+    required this.velocity,
+    required this.size,
+  });
 }
 
 //────────────────────────────────────────
