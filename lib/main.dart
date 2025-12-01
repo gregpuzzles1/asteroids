@@ -320,7 +320,7 @@ class Starfield extends Component with HasGameReference<AsteroidsGame> {
       _radii.add(radius);
       _paints.add(
         Paint()
-          ..color = Colors.white.withOpacity(brightness)
+          ..color = Colors.white.withValues(alpha: brightness)
           ..style = PaintingStyle.fill,
       );
     }
@@ -612,7 +612,6 @@ class Asteroid extends PositionComponent
     if (position.x < 0) position.x += s.x;
     if (position.x > s.x) position.x -= s.x;
     if (position.y < 0) position.y += s.y;
-    if (position.y > s.y) position -= Vector2(0, s.y);
     if (position.y > s.y) position.y -= s.y;
   }
 
