@@ -6,8 +6,8 @@
 - Classic Asteroids game made with [Flutter](https://flutter.dev/) and [Flame](https://flame-engine.org/)
 - Inspired by the arcade game from the seventies
 
-<p align="center">
-  <img src="assets/output.gif" alt="15 Puzzle Demo" />
+<p align="left">
+  <img src="assets/output.gif" alt="asteroids demo" />
 </p>
 
 
